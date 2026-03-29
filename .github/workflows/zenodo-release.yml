@@ -1,0 +1,102 @@
+# ═══════════════════════════════════════════════════════════════════════
+#  zenodo-drop: Auto-deposit on GitHub release / tag
+#
+#  Trigger: push a tag like `paper7-v1`, `paper13-v2`, etc.
+#  The workflow extracts the paper folder name from the tag,
+#  runs zenodo-drop upload (or newversion), and publishes.
+#
+#  Required secrets:
+#    ZENODO_TOKEN         — Live Zenodo personal access token
+#    ZENODO_SANDBOX_TOKEN — Sandbox token (for testing)
+# ═══════════════════════════════════════════════════════════════════════
+
+name: Zenodo Auto-Deposit
+
+on:
+  push:
+    tags:
+      - 'paper*-v*'    # e.g. paper7-v1, paper13-v2
+
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      folder:
+        description: 'Paper folder path (e.g. examples/fractal-series/paper14)'
+        required: true
+      mode:
+        description: 'upload or newversion'
+        required: true
+        default: 'upload'
+      sandbox:
+        description: 'Use sandbox? (true/false)'
+        required: true
+        default: 'true'
+
+jobs:
+  deposit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests pyyaml
+
+      - name: Parse tag → paper folder + mode
+        id: parse
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "folder=${{ github.event.inputs.folder }}" >> $GITHUB_OUTPUT
+            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+            echo "sandbox=${{ github.event.inputs.sandbox }}" >> $GITHUB_OUTPUT
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            # Extract paper name and version from tag like "paper7-v1"
+            PAPER=$(echo "$TAG" | sed 's/-v[0-9]*//')
+            VERSION=$(echo "$TAG" | grep -oP 'v\d+')
+
+            # Determine mode: v1 = upload, v2+ = newversion
+            VER_NUM=$(echo "$VERSION" | tr -d 'v')
+            if [ "$VER_NUM" = "1" ]; then
+              MODE="upload"
+            else
+              MODE="newversion"
+            fi
+
+            # Default folder convention: examples/fractal-series/<paper>
+            FOLDER="examples/fractal-series/${PAPER}"
+            echo "folder=${FOLDER}" >> $GITHUB_OUTPUT
+            echo "mode=${MODE}" >> $GITHUB_OUTPUT
+            echo "sandbox=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run zenodo-drop
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          ZENODO_SANDBOX_TOKEN: ${{ secrets.ZENODO_SANDBOX_TOKEN }}
+        run: |
+          SANDBOX_FLAG=""
+          if [ "${{ steps.parse.outputs.sandbox }}" = "true" ]; then
+            SANDBOX_FLAG="--sandbox"
+          else
+            SANDBOX_FLAG="--live"
+          fi
+
+          python cli.py ${{ steps.parse.outputs.mode }} \
+            ${{ steps.parse.outputs.folder }} \
+            ${SANDBOX_FLAG} \
+            --preview
+
+      - name: Upload ledger as artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: submitted-ledger
+          path: submitted.json

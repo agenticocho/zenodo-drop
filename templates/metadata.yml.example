@@ -1,0 +1,54 @@
+# ═══════════════════════════════════════════════════════════════════════
+#  zenodo-drop metadata template
+#  Copy this file as metadata.yml into your paper folder and fill it in.
+#  If you have a .tex or .pdf in the folder, zenodo-drop can auto-generate
+#  this file — just run `zenodo-drop upload <folder>` without a metadata.yml.
+# ═══════════════════════════════════════════════════════════════════════
+
+title: "Your Paper Title Here"
+
+description: |
+  Your abstract goes here.  Supports basic HTML if needed.
+
+# upload_type: "publication" (default) | "dataset" | "software" | "poster" | ...
+upload_type: publication
+
+# publication_type: "preprint" (default) | "article" | "report" | "workingpaper" | ...
+publication_type: preprint
+
+# Defaults to today if omitted
+# publication_date: "2026-01-01"
+
+# Optional version string (used in the ledger)
+version: "v1"
+
+creators:
+  - name: "Last, First"
+    affiliation: "Your Institution"
+    orcid: ""   # e.g. "0000-0002-1234-5678"
+
+keywords:
+  - "keyword-1"
+  - "keyword-2"
+
+# CC-BY-4.0 (default) | CC0-1.0 | MIT | Apache-2.0 | GPL-3.0-only | ...
+license: "CC-BY-4.0"
+
+# Language (ISO 639-2, default: "eng")
+language: "eng"
+
+# ─────────────────────────────────────────────────────────────────────
+#  Related identifiers — link to other papers / datasets
+#
+#  Valid relations:
+#    references, isReferencedBy, cites, isCitedBy,
+#    isPartOf, hasPart, continues, isContinuedBy,
+#    isNewVersionOf, isPreviousVersionOf,
+#    isSupplementTo, isSupplementedBy,
+#    isDerivedFrom, isSourceOf, ...
+# ─────────────────────────────────────────────────────────────────────
+related_identifiers: []
+  # Example:
+  # - identifier: "10.5281/zenodo.1234567"
+  #   relation: "references"
+  #   resource_type: "publication-preprint"

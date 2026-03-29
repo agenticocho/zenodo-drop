@@ -1,0 +1,24 @@
+# Example metadata — replace with your paper's details
+
+title: "My First Zenodo Upload"
+
+description: |
+  This is an example paper uploaded with zenodo-drop.
+  Replace this with your actual abstract.
+
+upload_type: publication
+publication_type: preprint
+version: "v1"
+
+creators:
+  - name: "Doe, Jane"
+    affiliation: "Independent Researcher"
+    orcid: ""
+
+keywords:
+  - "example"
+  - "zenodo-drop"
+
+license: "CC-BY-4.0"
+
+related_identifiers: []

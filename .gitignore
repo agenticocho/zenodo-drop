@@ -1,0 +1,25 @@
+# Zenodo tokens — NEVER commit these
+.zenodo_token
+.env
+
+# Ledger (optional — you may want to commit this to track your series)
+# submitted.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
