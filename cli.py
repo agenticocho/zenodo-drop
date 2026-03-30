@@ -215,6 +215,39 @@ def cmd_upload(args):
         ledger_path=ledger_path,
     )
 
+    # 6. Clean up ghost drafts
+    # Zenodo sometimes creates duplicate unsubmitted deposits server-side.
+    # Delete any unsubmitted drafts that aren't the one we just published.
+    _cleanup_ghost_drafts(dep_id, sandbox=sandbox)
+
+
+def _cleanup_ghost_drafts(published_id: int, sandbox: bool = True):
+    """Delete unsubmitted draft deposits that aren't the published one."""
+    from zenodo_api import _resolve_token, _base_url, _headers
+    import requests as _req
+
+    token = _resolve_token(sandbox)
+    base = _base_url(sandbox)
+    hdrs = _headers(token)
+
+    r = _req.get(
+        f"{base}/deposit/depositions",
+        headers=hdrs,
+        params={"size": 50, "sort": "mostrecent"},
+    )
+    if not r.ok:
+        return
+
+    cleaned = 0
+    for dep in r.json():
+        if dep.get("state") == "unsubmitted" and dep["id"] != published_id:
+            del_r = _req.delete(f"{base}/deposit/depositions/{dep['id']}", headers=hdrs)
+            if del_r.ok or del_r.status_code == 204:
+                cleaned += 1
+
+    if cleaned:
+        print(f"  🧹  Cleaned {cleaned} ghost draft(s)")
+
 
 def cmd_newversion(args):
     """Create a new version of an existing deposit."""
