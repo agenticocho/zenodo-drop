@@ -142,14 +142,15 @@ def create_deposit(
     url = f"{_base_url(sandbox)}/deposit/depositions"
     payload = {"metadata": metadata} if metadata else {}
 
-    resp = _retry_request(
-        lambda: requests.post(
-            url,
-            json=payload,
-            headers=_headers(token, "application/json"),
-        ),
-        idempotent=False,  # POST creates a resource — do NOT retry on 5xx
+    # CRITICAL: Single POST, no retry wrapper.
+    # create_deposit is non-idempotent — retrying on any error
+    # (including 5xx, timeouts, or connection resets) creates ghost drafts.
+    resp = requests.post(
+        url,
+        json=payload,
+        headers=_headers(token, "application/json"),
     )
+    resp.raise_for_status()
     return resp.json()
 
 
@@ -237,12 +238,11 @@ def create_new_version(
     token = token or _resolve_token(sandbox)
     url = f"{_base_url(sandbox)}/deposit/depositions/{deposition_id}/actions/newversion"
 
-    resp = _retry_request(
-        lambda: requests.post(url, headers=_headers(token)),
-        idempotent=False,  # POST creates a new draft — do NOT retry on 5xx
-    )
-    data = resp.json()
-    return data
+    # CRITICAL: Single POST, no retry wrapper.
+    # newversion creates a new draft — retrying creates duplicates.
+    resp = requests.post(url, headers=_headers(token))
+    resp.raise_for_status()
+    return resp.json()
 
 
 def get_new_version_draft(
