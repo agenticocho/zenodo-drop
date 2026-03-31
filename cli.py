@@ -89,6 +89,71 @@ def _ensure_metadata(folder: str) -> str:
     return out_path
 
 
+def _get_deposit_ids(sandbox: bool = True) -> set:
+    """
+    Snapshot all current deposit IDs.  Used before create_deposit()
+    so we can spot server-side duplicates afterwards.
+    """
+    from zenodo_api import _resolve_token, _base_url, _headers
+    import requests as _req
+
+    token = _resolve_token(sandbox)
+    base = _base_url(sandbox)
+    r = _req.get(
+        f"{base}/deposit/depositions",
+        headers=_headers(token),
+        params={"size": 200, "sort": "mostrecent"},
+    )
+    if r.ok:
+        return {d["id"] for d in r.json()}
+    return set()
+
+
+def _kill_server_dupes(keep_id: int, ids_before: set, sandbox: bool = True):
+    """
+    Zenodo's backend sometimes creates duplicate deposits from a single POST.
+    This function runs immediately after create_deposit(), compares the current
+    deposit list to the pre-create snapshot, and deletes any new deposits
+    that aren't the one we intend to keep.
+    """
+    import time
+    from zenodo_api import _resolve_token, _base_url, _headers
+    import requests as _req
+
+    time.sleep(1)  # brief pause for Zenodo to settle
+
+    token = _resolve_token(sandbox)
+    base = _base_url(sandbox)
+    hdrs = _headers(token)
+
+    r = _req.get(
+        f"{base}/deposit/depositions",
+        headers=hdrs,
+        params={"size": 200, "sort": "mostrecent"},
+    )
+    if not r.ok:
+        return
+
+    ids_after = {d["id"] for d in r.json()}
+    new_ids = ids_after - ids_before
+    dupes = new_ids - {keep_id}
+
+    if dupes:
+        print(f"  ⚠️  Zenodo created {len(dupes)} server-side duplicate(s) — deleting...")
+        for dupe_id in sorted(dupes):
+            dr = _req.delete(f"{base}/deposit/depositions/{dupe_id}", headers=hdrs)
+            if dr.ok or dr.status_code == 204:
+                print(f"  🗑️   Deleted ghost {dupe_id}")
+            else:
+                # May already be published by the time we get here — try discard first
+                _req.post(f"{base}/deposit/depositions/{dupe_id}/actions/discard", headers=hdrs)
+                dr2 = _req.delete(f"{base}/deposit/depositions/{dupe_id}", headers=hdrs)
+                if dr2.ok or dr2.status_code == 204:
+                    print(f"  🗑️   Deleted ghost {dupe_id} (after discard)")
+                else:
+                    print(f"  ⚠️  Could not delete ghost {dupe_id} ({dr2.status_code})")
+
+
 def _print_metadata_preview(zenodo_meta: dict):
     """Pretty-print the metadata payload."""
     print("\n" + "=" * 70)
@@ -173,13 +238,15 @@ def cmd_upload(args):
 
     sandbox = args.sandbox
 
-    # 1. Create deposit
+    # 1. Create deposit (with duplicate guard)
     print(f"\n  🚀  Creating deposit on {'SANDBOX' if sandbox else 'LIVE'}...")
+    ids_before = _get_deposit_ids(sandbox)
     deposit = create_deposit(sandbox=sandbox)
     dep_id = deposit["id"]
     bucket_url = deposit["links"]["bucket"]
     pre_doi = deposit.get("metadata", {}).get("prereserve_doi", {}).get("doi", "pending")
     print(f"  ✅  Deposit {dep_id} created  (pre-reserved DOI: {pre_doi})")
+    _kill_server_dupes(dep_id, ids_before, sandbox)
 
     # 2. Update metadata
     print("  📝  Setting metadata...")
