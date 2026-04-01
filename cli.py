@@ -115,43 +115,51 @@ def _kill_server_dupes(keep_id: int, ids_before: set, sandbox: bool = True):
     This function runs immediately after create_deposit(), compares the current
     deposit list to the pre-create snapshot, and deletes any new deposits
     that aren't the one we intend to keep.
+
+    Runs TWO sweeps with increasing delay to catch late-arriving duplicates
+    that Zenodo's backend creates asynchronously.
     """
     import time
     from zenodo_api import _resolve_token, _base_url, _headers
     import requests as _req
 
-    time.sleep(1)  # brief pause for Zenodo to settle
-
     token = _resolve_token(sandbox)
     base = _base_url(sandbox)
     hdrs = _headers(token)
 
-    r = _req.get(
-        f"{base}/deposit/depositions",
-        headers=hdrs,
-        params={"size": 200, "sort": "mostrecent"},
-    )
-    if not r.ok:
-        return
+    total_killed = 0
+    for sweep, delay in enumerate([3, 8], start=1):
+        time.sleep(delay)
 
-    ids_after = {d["id"] for d in r.json()}
-    new_ids = ids_after - ids_before
-    dupes = new_ids - {keep_id}
+        r = _req.get(
+            f"{base}/deposit/depositions",
+            headers=hdrs,
+            params={"size": 200, "sort": "mostrecent"},
+        )
+        if not r.ok:
+            continue
 
-    if dupes:
-        print(f"  ⚠️  Zenodo created {len(dupes)} server-side duplicate(s) — deleting...")
+        ids_now = set()
+        for d in r.json():
+            if isinstance(d, dict):
+                ids_now.add(d["id"])
+
+        dupes = (ids_now - ids_before) - {keep_id}
         for dupe_id in sorted(dupes):
             dr = _req.delete(f"{base}/deposit/depositions/{dupe_id}", headers=hdrs)
             if dr.ok or dr.status_code == 204:
-                print(f"  🗑️   Deleted ghost {dupe_id}")
+                print(f"  🗑️   Deleted ghost {dupe_id} (sweep {sweep})")
+                total_killed += 1
             else:
-                # May already be published by the time we get here — try discard first
+                # May need discard first if Zenodo auto-processed it
                 _req.post(f"{base}/deposit/depositions/{dupe_id}/actions/discard", headers=hdrs)
                 dr2 = _req.delete(f"{base}/deposit/depositions/{dupe_id}", headers=hdrs)
                 if dr2.ok or dr2.status_code == 204:
-                    print(f"  🗑️   Deleted ghost {dupe_id} (after discard)")
-                else:
-                    print(f"  ⚠️  Could not delete ghost {dupe_id} ({dr2.status_code})")
+                    print(f"  🗑️   Deleted ghost {dupe_id} (sweep {sweep}, after discard)")
+                    total_killed += 1
+
+    if total_killed:
+        print(f"  ⚠️  Killed {total_killed} server-side duplicate(s)")
 
 
 def _print_metadata_preview(zenodo_meta: dict):
@@ -289,7 +297,11 @@ def cmd_upload(args):
 
 
 def _cleanup_ghost_drafts(published_id: int, sandbox: bool = True):
-    """Delete unsubmitted draft deposits that aren't the published one."""
+    """
+    Delete unsubmitted draft deposits that aren't the published one.
+    Runs two sweeps (at 3s and 10s after publish) to catch late arrivals.
+    """
+    import time
     from zenodo_api import _resolve_token, _base_url, _headers
     import requests as _req
 
@@ -297,23 +309,26 @@ def _cleanup_ghost_drafts(published_id: int, sandbox: bool = True):
     base = _base_url(sandbox)
     hdrs = _headers(token)
 
-    r = _req.get(
-        f"{base}/deposit/depositions",
-        headers=hdrs,
-        params={"size": 50, "sort": "mostrecent"},
-    )
-    if not r.ok:
-        return
-
     cleaned = 0
-    for dep in r.json():
-        if dep.get("state") == "unsubmitted" and dep["id"] != published_id:
-            del_r = _req.delete(f"{base}/deposit/depositions/{dep['id']}", headers=hdrs)
-            if del_r.ok or del_r.status_code == 204:
-                cleaned += 1
+    for delay in [3, 10]:
+        time.sleep(delay)
+        r = _req.get(
+            f"{base}/deposit/depositions",
+            headers=hdrs,
+            params={"size": 100, "sort": "mostrecent"},
+        )
+        if not r.ok:
+            continue
+
+        for dep in r.json():
+            if isinstance(dep, dict) and dep.get("state") == "unsubmitted" and dep["id"] != published_id:
+                del_r = _req.delete(f"{base}/deposit/depositions/{dep['id']}", headers=hdrs)
+                if del_r.ok or del_r.status_code == 204:
+                    cleaned += 1
+                    print(f"  🗑️   Post-publish: deleted ghost {dep['id']}")
 
     if cleaned:
-        print(f"  🧹  Cleaned {cleaned} ghost draft(s)")
+        print(f"  🧹  Cleaned {cleaned} ghost draft(s) total")
 
 
 def cmd_newversion(args):
