@@ -299,7 +299,8 @@ def cmd_upload(args):
 def _cleanup_ghost_drafts(published_id: int, sandbox: bool = True):
     """
     Delete unsubmitted draft deposits that aren't the published one.
-    Runs two sweeps (at 3s and 10s after publish) to catch late arrivals.
+    Runs THREE sweeps at increasing delays (3s, 10s, 20s) to catch
+    Zenodo's server-side duplicates which appear asynchronously.
     """
     import time
     from zenodo_api import _resolve_token, _base_url, _headers
@@ -310,25 +311,28 @@ def _cleanup_ghost_drafts(published_id: int, sandbox: bool = True):
     hdrs = _headers(token)
 
     cleaned = 0
-    for delay in [3, 10]:
+    for delay in [3, 10, 20]:
         time.sleep(delay)
-        r = _req.get(
-            f"{base}/deposit/depositions",
-            headers=hdrs,
-            params={"size": 100, "sort": "mostrecent"},
-        )
-        if not r.ok:
-            continue
-
-        for dep in r.json():
-            if isinstance(dep, dict) and dep.get("state") == "unsubmitted" and dep["id"] != published_id:
-                del_r = _req.delete(f"{base}/deposit/depositions/{dep['id']}", headers=hdrs)
-                if del_r.ok or del_r.status_code == 204:
-                    cleaned += 1
-                    print(f"  🗑️   Post-publish: deleted ghost {dep['id']}")
+        # Fetch multiple pages to ensure we see everything
+        for page in [1, 2]:
+            r = _req.get(
+                f"{base}/deposit/depositions",
+                headers=hdrs,
+                params={"size": 100, "page": page, "sort": "mostrecent"},
+            )
+            if not r.ok:
+                continue
+            for dep in r.json():
+                if isinstance(dep, dict) and dep.get("state") == "unsubmitted" and dep["id"] != published_id:
+                    del_r = _req.delete(f"{base}/deposit/depositions/{dep['id']}", headers=hdrs)
+                    if del_r.ok or del_r.status_code == 204:
+                        cleaned += 1
+                        print(f"  🗑️   Deleted ghost {dep['id']} (sweep at +{delay}s)")
 
     if cleaned:
         print(f"  🧹  Cleaned {cleaned} ghost draft(s) total")
+    else:
+        print(f"  ✅  No ghost drafts detected (check Zenodo UI to confirm)")
 
 
 def cmd_newversion(args):
@@ -448,6 +452,50 @@ def cmd_ledger(args):
     for key, entry in sorted(ledger.items(), key=lambda x: x[0]):
         print(f"    {key:<15}  DOI: {entry.get('doi', '?'):<35}  v: {entry.get('version', '?'):<5}  {entry.get('submitted', '')}")
     print()
+
+
+def cmd_cleanup(args):
+    """Delete all unsubmitted draft deposits."""
+    from zenodo_api import _resolve_token, _base_url, _headers
+    import requests as _req
+
+    sandbox = args.sandbox
+    token = _resolve_token(sandbox)
+    base = _base_url(sandbox)
+    hdrs = _headers(token)
+    target = "SANDBOX" if sandbox else "LIVE"
+
+    print(f"\n  Scanning {target} Zenodo for ghost drafts...\n")
+
+    cleaned = 0
+    for page in [1, 2, 3]:
+        r = _req.get(
+            f"{base}/deposit/depositions",
+            headers=hdrs,
+            params={"size": 100, "page": page, "sort": "mostrecent"},
+        )
+        if not r.ok:
+            continue
+        for dep in r.json():
+            if isinstance(dep, dict) and dep.get("state") == "unsubmitted":
+                dep_id = dep["id"]
+                title = dep.get("title", dep.get("metadata", {}).get("title", "(untitled)"))[:60]
+                if args.dry_run:
+                    print(f"  Would delete: {dep_id}  {title}")
+                    cleaned += 1
+                else:
+                    dr = _req.delete(f"{base}/deposit/depositions/{dep_id}", headers=hdrs)
+                    if dr.ok or dr.status_code == 204:
+                        print(f"  🗑️   Deleted {dep_id}  {title}")
+                        cleaned += 1
+                    else:
+                        print(f"  ⚠️  Failed to delete {dep_id}: {dr.status_code}")
+
+    if cleaned:
+        print(f"\n  {'Would delete' if args.dry_run else 'Deleted'} {cleaned} ghost draft(s)")
+    else:
+        print(f"  No ghost drafts found via API.")
+        print(f"  If you see drafts on the Zenodo web UI, they may need manual deletion.")
 
 
 def cmd_backlink(args):
@@ -620,6 +668,10 @@ def build_parser():
     # --- ledger ---
     subparsers.add_parser("ledger", help="Print the submitted.json ledger")
 
+    # --- cleanup ---
+    p_cl = subparsers.add_parser("cleanup", help="Delete ghost draft deposits")
+    p_cl.add_argument("--dry-run", action="store_true", help="Preview only")
+
     # --- backlink ---
     p_bl = subparsers.add_parser("backlink", help="Add isReferencedBy to all prior papers")
     p_bl.add_argument("doi", help="DOI of the new paper (e.g. 10.5281/zenodo.19317500)")
@@ -651,6 +703,7 @@ def main():
         "preview": cmd_preview,
         "chain": cmd_chain,
         "ledger": cmd_ledger,
+        "cleanup": cmd_cleanup,
         "backlink": cmd_backlink,
     }
 
